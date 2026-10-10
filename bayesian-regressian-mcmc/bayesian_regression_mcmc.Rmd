@@ -1,0 +1,1362 @@
+---
+title: "Bayesian Project"
+author: "Andrew"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+dir.create("figures", showWarnings = FALSE)  # output folder for saved PNGs
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+#Packages and libraries
+
+#install.packages("ggplot2")
+#install.packages("plotly", dependencies = TRUE)
+#install.packages("rgl")
+
+library(ggplot2)
+#library(plotly)
+
+#install.packages("knitr")   
+library(knitr)   
+
+
+```
+
+The model that we are trying to fit is
+
+y=alpha + beta_1\**x_1 + beta_2\**x_2 + epsilon
+
+epsilon\~N(0, 1/tau)
+
+We want to take 1000 posterior samples based on 80000 simulated sets of parameter values from the prior
+
+```{r}
+K<-80000 #No. of prior samples
+nsamples <-1000 # No. of posterior samples to take
+
+set.seed(115)
+
+pred_point <-3.0 # value at which to compute the predictive distribution
+```
+
+Set up of true parameter values, generate data from these (you wont know these if you where given a data set but in a simulation study you want to show your code can give these values)
+
+```{r}
+truealpha=1.5
+truebeta_1=2.0
+truebeta_2=5.0
+
+truetau=1.0
+```
+
+Prior parameters: normal on alpha and beta, gamma on tau
+
+```{r}
+alphamean=0
+alphavar = 100
+beta_1mean=0
+beta_1var=100
+beta_2mean = 2.0
+beta_2var = 100
+taushape=0.5
+tauscale=0.5
+```
+
+To set up the data we need to use the true parameter values and set up what x is going to be
+
+```{r}
+
+x_1 <- round(runif(100, 0, 10), 2)
+
+x_2 <- round(runif(100, 0, 10), 2)
+
+
+n = length(x_1)
+y<-truealpha + truebeta_1*x_1 + truebeta_2*x_2 + rnorm(n,0,sd = sqrt((1/truetau)))
+data<-data.frame(y,x_1, x_2)
+
+
+fit <- lm(y ~ x_1 + x_2)
+
+ggplot(data, aes(x_1,y))+geom_point()
+ggplot(data, aes(x_2,y))+geom_point()
+
+```
+
+
+Maximum Likelihood:
+
+```{r}
+# Time the ML fit
+t_ml <- system.time({
+  ml_fit <- lm(y ~ x_1 + x_2)
+})
+
+summary(ml_fit)
+
+# coefficients (MLEs)
+ml_coefs <- coef(ml_fit)       # (Intercept), x_1, x_2
+
+n <- length(y)
+p <- 3  # alpha, beta1, beta2
+
+# RSS and sigma^2_hat
+RSS        <- sum(resid(ml_fit)^2)
+sigma2_hat <- RSS / (n - p)      
+tau_hat    <- 1 / sigma2_hat
+
+ml_results <- c(
+  alpha = ml_coefs[1],
+  beta1 = ml_coefs[2],
+  beta2 = ml_coefs[3],
+  tau   = tau_hat
+)
+
+time_ml <- as.numeric(t_ml["elapsed"])
+ml_results
+time_ml
+
+```
+
+
+
+
+
+Using importance sampling
+
+```{r}
+#Try and write your own importance sampling code. For this you will need to loop over your samples
+t_is <- system.time({alpha_list <- rep(NA, nsamples)
+beta1_list <- rep(NA, nsamples)
+beta2_list <- rep(NA, nsamples)
+tau_list <- rep(NA, nsamples)
+for (i in 1:nsamples){
+  ##prior generation of K samples
+     alpha <- rnorm(K, alphamean, sqrt(alphavar))
+     beta_1 <- rnorm(K, beta_1mean, sqrt(beta_1var))
+     beta_2 <- rnorm(K, beta_2mean, sqrt(beta_2var))
+     tau <- rgamma(K, shape = taushape, scale = tauscale)  # scale = 0.5, i.e. rate 2, same prior as the other methods
+     
+    ###computing the logweights
+     
+     weights <- rep(NA, K)
+     
+     for (j in 1:K){
+       alpha_1 <- alpha[j]
+       beta1_1 <- beta_1[j]
+       beta2_1 <- beta_2[j]
+       tau_1 <- tau[j]
+     
+     expsum <- 0
+       for (l in 1:length(x_1)){
+     expsum <- expsum + (y[l]-alpha_1-beta1_1*x_1[l]- beta2_1*x_2[l])^2
+       }
+     
+     weights[j] <- (tau_1 / (2*pi))^( length(x_1)/2) * exp( - (tau_1/2) * expsum)
+     }
+     
+     sum_weights <- sum(weights)
+     
+     weights <- weights/sum_weights
+     
+     total <- sum(weights)
+     
+    
+   ### pick your parameters with probability weight
+     index <- sample(1:K, 1, replace=FALSE, prob = weights)
+     
+     alpha_list[i] <- alpha[index]
+     beta1_list[i] <- beta_1[index]
+     beta2_list[i] <- beta_2[index]
+     tau_list[i] <- tau[index]
+    
+  
+    ### Now compute the sum of residuals using these values of alpha and beta
+    
+}})
+
+#residual <- alpha_mean + beta_mean*x+rnorm(n, 0, (1/tau_mean))
+
+
+
+###save your results
+
+```
+
+Posterior summaries
+
+```{r}
+###to get the means as a point estimate use MC integration
+alpha_pred <- sum(alpha_list)/nsamples
+beta1_pred <- sum(beta1_list)/nsamples
+beta2_pred <- sum(beta2_list)/nsamples
+tau_mean <- sum(tau_list)/nsamples
+posterior_means = c(alpha_pred, beta1_pred, beta2_pred, tau_mean)
+posterior_means
+
+##quantile() can be used to get the credible intervals for these parameters
+alpha_interval <- c(quantile(alpha_list, prob=0.05), quantile(alpha_list, prob= 0.95))
+alpha_interval
+
+beta1_interval <- c(quantile(beta1_list, prob=0.05), quantile(beta1_list, prob= 0.95))
+beta1_interval
+
+beta2_interval <- c(quantile(beta2_list, prob=0.05), quantile(beta2_list, prob= 0.95))
+beta2_interval
+
+tau_interval <- c(quantile(tau_list, prob=0.05), quantile(tau_list, prob= 0.95))
+tau_interval
+
+
+
+
+
+
+```
+
+
+
+
+```{r}
+##plotting the frequency of alpha, beta and tau using hist()
+
+hist(alpha_list)
+hist(beta1_list)
+hist(beta2_list)
+hist(tau_list)
+
+```
+
+
+
+
+
+
+
+```{r}
+lsmeans_results<-lm(y~x_1 + x_2, data)
+summary(lsmeans_results)
+confint(lsmeans_results)
+
+anova(lsmeans_results)
+sum(lsmeans_results$residuals^2)/qchisq(0.975,df=21)
+sum(lsmeans_results$residuals^2)/qchisq(0.025,df=21)
+```
+
+MCMC approaches\`\`
+
+1- Metropolis Hasting
+
+Using the same data try and fit the model using the Metropolis Hastings algorithm. Assume normal priors on alpha and beta, and a uniform prior on the sd.
+
+sd=sqrt(1/tau)
+
+```{r}
+###Likelihood set up as a function
+Params = c(0, 0 , 0.5, 0.5)
+
+likelihood_1 = function(Params){
+  alpha = Params[1]
+  beta_1 = Params[2]
+  beta_2 = Params[3]
+  tau = Params[4]
+  
+  return(sum(dnorm(y, alpha + beta_1*x_1 + beta_2*x_2, sd = sqrt(1/tau), log = T)))}
+
+
+
+likelihood_2 = function(Params){
+  alpha = Params[1]
+  beta_1 = Params[2]
+  beta_2 = Params[3]
+  tau = Params[4]
+  
+
+  if (!is.finite(tau) || tau <= 0) return(-Inf)
+  mu <- alpha + beta_1 * x_1 + beta_2 * x_2
+  expsum <- sum((y - mu)^2)           
+  n <- length(y)
+  return( (n/2) * (log(tau) - log(2*pi)) - (tau/2) * expsum )
+}
+
+  
+
+likelihood_1(Params)
+likelihood_2(Params)
+```
+
+```{r}
+###prior set up
+prior = function(Params){
+  alpha = Params[1]
+  beta_1 = Params[2]
+  beta_2 = Params[3]
+  tau = Params[4]
+  
+  prior_alpha = dnorm(alpha, alphamean, sd = sqrt(alphavar), log = T)
+  prior_beta_1 = dnorm(beta_1, beta_1mean, sd = sqrt(beta_1var), log = T)
+  prior_beta_2 = dnorm(beta_2, beta_2mean, sd = sqrt(beta_2var), log = T)
+  prior_tau = dgamma(tau, shape = taushape, scale = tauscale, log = T)
+  
+  return(prior_alpha+ prior_beta_1 + prior_beta_2 + prior_tau)
+
+}
+prior(Params)
+```
+
+```{r}
+# Defensive posterior: returns -Inf for invalid params
+posterior = function(Params){
+  # basic validity checks
+  if (any(!is.finite(Params))) return(-Inf)
+  if (length(Params) < 4) return(-Inf)
+  tau = Params[4]
+  if (is.na(tau) || tau <= 0) return(-Inf)
+
+  # evaluate log-likelihood and log-prior
+  loglik = likelihood_1(Params)
+  logprior = prior(Params)
+
+  # catch cases where prior() accidentally returns a vector, NA, or non-finite
+  if (length(logprior) != 1) {
+    warning("posterior(): prior() did not return a scalar. Returning -Inf.")
+    return(-Inf)
+  }
+  if (!is.finite(loglik) || !is.finite(logprior)) return(-Inf)
+
+  return(loglik + logprior)
+}
+posterior(Params)
+```
+
+```{r}
+###proposal set up
+proposalfunction = function(Params){
+  alpha = Params[1]
+  beta_1 = Params[2]
+  beta_2 = Params[3]
+  tau = Params[4]
+  
+  s_alpha = 0.05
+  s_beta1 = 0.05
+  s_beta2 = 0.05
+  s_logtau = 0.01
+  
+  prop_logtau <- rnorm(1, log(tau), s_logtau)
+prop_tau     <- exp(prop_logtau)
+  
+  proposal = c(rnorm(1, alpha, sd = s_alpha), rnorm(1, beta_1, sd= s_beta1), rnorm(1, beta_2, sd = s_beta2), prop_tau) 
+  return(proposal)
+
+}
+
+startvalue = c(4,0, 3, 3)
+proposalfunction(startvalue)
+```
+
+```{r}
+####function call
+
+run_metropolis_MCMC = function(startvalue, iterations){
+    accept = 0
+    chain = array(dim = c(iterations+1,4))
+    chain[1,] = startvalue
+    for (i in 1:iterations){
+        proposal = proposalfunction(chain[i,])
+ 
+        # log-tau random walk is symmetric on log(tau) but not on tau, so add the Jacobian term log(tau*) - log(tau)
+        log_ratio = posterior(proposal) - posterior(chain[i,]) + log(proposal[4]) - log(chain[i,4])
+        probab = exp(log_ratio)
+      
+        if (runif(1) < probab){
+            chain[i+1,] = proposal
+            accept = accept + 1
+        }else{
+            chain[i+1,] = chain[i,]
+        }
+    }
+    attr(chain, "accept_rate") <- accept / iterations
+    return(chain)
+}
+
+
+
+
+
+
+```
+
+```{r}
+#tuning
+tune = function(startvalue, iterations) {
+  chain = run_metropolis_MCMC(startvalue, iterations)
+  return(attr(chain, "accept_rate"))}
+  
+acceptance = tune(startvalue, 1000)
+
+```
+
+```{r}
+###running a call
+iterations = 50000
+startvalue = c(4,0, 3, 1)
+t_metrop = system.time({chain = run_metropolis_MCMC(startvalue, iterations)}) #Timing metropolis hastings
+ 
+burnin = 10000
+acceptance = 1-mean(duplicated(chain[-(1:burnin),]))
+
+MHalpha<-mean(chain[(burnin+1):nrow(chain),1])
+MHbeta_1<-mean(chain[(burnin+1):nrow(chain),2])
+MHbeta_2<-mean(chain[(burnin+1):nrow(chain),3])
+MHTau<-mean(chain[(burnin+1):nrow(chain),4])
+
+options(max.print=1000)
+
+```
+
+```{r}
+par(mfrow = c(2,3))
+
+#Alpha hist
+
+hist(chain[-(1:burnin),1],nclass=30, main="Posterior of a", xlab="True value = red line" )
+abline(v = mean(chain[-(1:burnin),1]))
+abline(v = truealpha, col="red" )
+
+#Beta_1 hist
+
+hist(chain[-(1:burnin),2],nclass=30, main="Posterior of b_1", xlab="True value = red line")
+abline(v = mean(chain[-(1:burnin),2]))
+abline(v = truebeta_1, col="red" )
+
+#Beta_2 hist
+
+hist(chain[-(1:burnin),3],nclass=30, main="Posterior of b_2", xlab="True value = red line")
+abline(v = mean(chain[-(1:burnin),3]))
+abline(v = truebeta_2, col="red" )
+
+#tau/sd hist
+
+hist(chain[-(1:burnin),4],nclass=30, main="Posterior of tau", xlab="True value = red line")
+abline(v = mean(chain[-(1:burnin),4]) )
+abline(v = truetau, col="red" )
+
+#Alpha chain values
+
+plot(chain[-(1:burnin),1], type = "l", xlab="True value = red line" , main = "Chain values of a")
+abline(h = truealpha, col="red" )
+
+#Beta_1 chain values
+
+plot(chain[-(1:burnin),2], type = "l", xlab="True value = red line" , main = "Chain values of b_1")
+abline(h = truebeta_1, col="red" )
+
+#Beta_2 chain values
+
+plot(chain[-(1:burnin),3], type = "l", xlab="True value = red line" , main = "Chain values of b_2")
+abline(h = truebeta_2, col="red" )
+
+#tau/sd chain values
+
+plot(chain[-(1:burnin),4], type = "l", xlab="True value = red line" , main = "Chain values of tau")
+abline(h = truetau, col="red" )
+```
+
+
+Traceplot of the above metropolis hastings algorithm (like above but for a png image for the report):
+
+```{r}
+# Post–burn-in MH samples
+post_mh <- chain[(burnin+1):nrow(chain), ]
+colnames(post_mh) <- c("alpha","beta1","beta2","tau")
+
+png("figures/MH_traceplots.png", width = 1200, height = 900, res = 150)
+par(mfrow = c(2,2), mar = c(4,4,2,1))
+
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+for (p in colnames(post_mh)) {
+  plot(post_mh[, p], type = "l",
+       main = paste("MH trace:", p),
+       xlab = "Iteration (post burn-in)",
+       ylab = p)
+  abline(h = true_vals[p], col = "blue", lwd = 2)
+}
+
+dev.off()
+```
+
+Posterior distribution of the MH chain (same as above but just putting it into png):
+
+```{r}
+
+colnames(chain) <- c("alpha","beta1","beta2","tau")
+
+
+mh_post <- chain[(burnin+1):nrow(chain), ]
+
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+params <- colnames(mh_post)
+
+# Save to PNG
+png("figures/mh_posterior_histograms.png",
+    width = 1200, height = 900, res = 150)
+
+par(mfrow = c(2,2), mar = c(4,4,2,1))
+
+for (p in params) {
+  samples <- mh_post[, p]
+  
+  # histogram
+  h <- hist(samples, breaks = 40, prob = TRUE,
+            main = paste("Posterior of", p),
+            xlab = p, border = "grey60", col = "lightblue")
+  
+  # overlay density
+  d <- density(samples)
+  lines(d, lwd = 2)
+  
+  # 95% equal-tailed credible interval
+  ci <- quantile(samples, probs = c(0.025, 0.975))
+  abline(v = ci, lty = 2, lwd = 2, col = "blue")
+  
+  # posterior median
+  med <- median(samples)
+  abline(v = med, lty = 1, lwd = 2, col = "black")
+  
+  # true value
+  true_val <- true_vals[p]
+  abline(v = true_val, col = "red", lwd = 2)
+  
+  # legend 
+  legend("topright",
+         legend = c(
+           paste0("Median=", round(med, 3)),
+           paste0("95%CI=", round(ci[1], 3), "-", round(ci[2], 3)),
+           paste0("True=",   round(true_val, 3))
+         ),
+         bty = "n")
+}
+
+dev.off()
+
+
+
+```
+Autocorrelation graph:
+
+```{r}
+# Keep only post-burn-in draws from MH
+post_mh <- chain[(burnin+1):nrow(chain), ]
+colnames(post_mh) <- c("alpha","beta1","beta2","tau")
+
+# Save figure
+png("figures/acf_plots_MH_pretty.png", width = 1200, height = 900, res = 150)
+
+par(mfrow = c(2,2), mar = c(4.5,4.5,3.5,1))  # same layout as Gibbs ACFs
+
+for (p in colnames(post_mh)) {
+  acf(post_mh[, p],
+      main = paste("ACF for", p, "(MH)"),
+      xlab = "Lag",
+      ylab = paste("Autocorrelation of", p),
+      col  = "steelblue",
+      lwd  = 2)
+}
+
+dev.off()
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Gibbs Sampling
+
+We need the conditional probability distributions for each parameter:
+
+```{r}
+# Gibbs sampler for linear model with Normal priors on betas and Gamma prior on tau
+
+
+#install.packages("coda")
+library(coda)
+
+gibbs_simple <- function(y, x1, x2,
+                         niter,
+                         alphamean, alphavar,
+                         beta1mean, beta1var,
+                         beta2mean, beta2var,
+                         taushape, taurate,
+                         start) {
+  n <- length(y)
+  if (length(x1) != n || length(x2) != n) stop("y, x1, x2 must have same length")
+
+  # starting values
+  if (is.null(start)) {
+    alpha <- mean(y)     # simple starting guess
+    beta1 <- 0
+    beta2 <- 0
+    tau   <- 1
+  } else {
+    alpha <- start[1]; beta1 <- start[2]; beta2 <- start[3]; tau <- start[4]
+  }
+
+  chain <- matrix(NA, nrow = niter, ncol = 4)
+  colnames(chain) <- c("alpha", "beta1", "beta2", "tau")
+
+  for (it in 1:niter) {
+    ## --- sample alpha | beta1,beta2,tau,y  (univariate normal) ---
+    sum_res <- 0.0
+    for (i in 1:n) {
+      sum_res <- sum_res + (y[i] - beta1 * x1[i] - beta2 * x2[i])
+    }
+    prec_alpha <- tau * n + 1 / alphavar          # precision
+    var_alpha  <- 1 / prec_alpha
+    mean_alpha <- var_alpha * (tau * sum_res + alphamean / alphavar)
+    alpha <- rnorm(1, mean_alpha, sqrt(var_alpha))
+
+    ## --- sample beta1 | alpha,beta2,tau,y  (univariate normal) ---
+    sum_x1sq <- 0.0
+    sum_x1res <- 0.0
+    for (i in 1:n) {
+      sum_x1sq <- sum_x1sq + (x1[i]^2)
+      sum_x1res <- sum_x1res + (x1[i] * (y[i] - alpha - beta2 * x2[i]))
+    }
+    prec_beta1 <- tau * sum_x1sq + 1 / beta1var
+    var_beta1  <- 1 / prec_beta1
+    mean_beta1 <- var_beta1 * (tau * sum_x1res + beta1mean / beta1var)
+    beta1 <- rnorm(1, mean_beta1, sqrt(var_beta1))
+
+    ## --- sample beta2 | alpha,beta1,tau,y  (univariate normal) ---
+    sum_x2sq <- 0.0
+    sum_x2res <- 0.0
+    for (i in 1:n) {
+      sum_x2sq <- sum_x2sq + (x2[i]^2)
+      sum_x2res <- sum_x2res + (x2[i] * (y[i] - alpha - beta1 * x1[i]))
+    }
+    prec_beta2 <- tau * sum_x2sq + 1 / beta2var
+    var_beta2  <- 1 / prec_beta2
+    mean_beta2 <- var_beta2 * (tau * sum_x2res + beta2mean / beta2var)
+    beta2 <- rnorm(1, mean_beta2, sqrt(var_beta2))
+
+    ## --- sample tau | alpha,beta1,beta2,y  (Gamma, rate parameterization) ---
+    sse <- 0.0
+    for (i in 1:n) {
+      resid <- y[i] - alpha - beta1 * x1[i] - beta2 * x2[i]
+      sse <- sse + resid^2
+    }
+    post_shape <- taushape + n / 2
+    post_rate  <- taurate + 0.5 * sse
+    tau <- rgamma(1, shape = post_shape, rate = post_rate)
+
+    ## store
+    chain[it, ] <- c(alpha, beta1, beta2, tau)
+  }
+
+  return(chain)
+}
+
+
+
+```
+
+```{r}
+iterations = 50000
+t_gibbs <- system.time({gibbs_chain <- gibbs_simple(y, x_1, x_2, niter = iterations,
+                      alphamean, alphavar,
+                      beta_1mean, beta_1var,
+                      beta_2mean, beta_2var,
+                      taushape, taurate = 1/taushape, startvalue)})
+
+# posterior means (after discarding the first 10,000 draws as burn-in)
+burnin = 10000
+prediction <- colMeans(gibbs_chain[(burnin+1):iterations, ])
+Gibbs_alpha <- prediction[1]
+Gibbs_beta1 <- prediction[2]
+Gibbs_beta2 <- prediction[3]
+Gibbs_tau <- prediction[4]
+
+```
+
+Now we get confidence intervals for each parameter:
+
+```{r}
+
+colnames(gibbs_chain) <- c("alpha","beta1","beta2","tau")
+
+chain_post <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+
+true_vals <- c(alpha = truealpha, beta1 = truebeta_1, beta2 = truebeta_2, tau = truetau)
+params <- colnames(chain_post)
+
+# Save to PNG
+png("figures/posterior_histograms.png", width = 1200, height = 900, res = 150)
+par(mfrow = c(2,2), mar = c(4,4,2,1))
+
+for (p in params) {
+  samples <- chain_post[, p]
+  h <- hist(samples, breaks = 40, prob = TRUE,
+            main = paste("Posterior of", p),
+            xlab = p, border = "grey60", col = "lightblue")
+  # overlay density
+  d <- density(samples)
+  lines(d, lwd = 2)
+  # credible interval (equal-tailed)
+  ci <- quantile(samples, probs = c(0.025, 0.975))
+  abline(v = ci, lty = 2, lwd = 2, col = "blue")
+  # median
+  abline(v = median(samples), lty = 1, lwd = 2, col = "black")
+  # true value
+  lines_x <- true_vals[p]
+  abline(v = lines_x, col = "red", lwd = 2)
+  legend("topright", legend = c(paste0("Median=", round(median(samples),3)),
+                                paste0("95%CI=", round(ci[1],3), "-", round(ci[2],3)),
+                                paste0("True=", round(lines_x,3))),
+         bty = "n")
+}
+dev.off()
+
+
+```
+
+Plotting histograms for a single run:
+
+```{r}
+
+colnames(gibbs_chain) <- c("alpha","beta1","beta2","tau")
+chain_post <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+
+true_vals <- c(alpha = truealpha, beta1 = truebeta_1, beta2 = truebeta_2, tau = truetau)
+params <- colnames(chain_post)
+
+# Save to PNG
+png("figures/gibbs_posterior_histograms.png", width = 1200, height = 900, res = 150)
+par(mfrow = c(2,2), mar = c(4,4,2,1))
+
+for (p in params) {
+  samples <- chain_post[, p]
+  h <- hist(samples, breaks = 40, prob = TRUE,
+            main = paste("Posterior of", p),
+            xlab = p, border = "grey60", col = "lightblue")
+  # overlay density
+  d <- density(samples)
+  lines(d, lwd = 2)
+  # credible interval (equal-tailed)
+  ci <- quantile(samples, probs = c(0.025, 0.975))
+  abline(v = ci, lty = 2, lwd = 2, col = "blue")
+  # median
+  abline(v = median(samples), lty = 1, lwd = 2, col = "black")
+  # true value
+  lines_x <- true_vals[p]
+  abline(v = lines_x, col = "red", lwd = 2)
+  legend("topright", legend = c(paste0("Median=", round(median(samples),3)),
+                                paste0("95%CI=", round(ci[1],3), "-", round(ci[2],3)),
+                                paste0("True=", round(lines_x,3))),
+         bty = "n")
+}
+dev.off()
+
+```
+
+Simulation: Simulating 1000 responses (y), keeping inputs (x) fixed, and running the gibbs sampler for each set of responses.
+
+```{r}
+B      <- 1000        # number of simulated datasets
+niter_sim  <- 5000   # shorter chains for the 1,000-dataset simulation
+burnin_sim <- 2500   # separate names so the main-run burn-in (10,000) is not overwritten
+
+# storage for posterior means from each run
+means_mat <- matrix(NA, nrow = B, ncol = 4)
+colnames(means_mat) <- c("alpha","beta1","beta2","tau")
+
+# optional: store 95% credible intervals for coverage
+ci_lower <- matrix(NA, nrow = B, ncol = 4)
+ci_upper <- matrix(NA, nrow = B, ncol = 4)
+colnames(ci_lower) <- colnames(ci_upper) <- colnames(means_mat)
+
+for (b in 1:B) {
+
+  # 1) simulate new y for this dataset
+  eps_b <- rnorm(n, mean = 0, sd = sqrt(1/truetau))
+  y_b   <- truealpha + truebeta_1 * x_1 + truebeta_2 * x_2 + eps_b
+
+  # 2) run Gibbs sampler on this dataset
+  gibbs_chain_b <- gibbs_simple(
+    y_b, x_1, x_2,
+    niter = niter_sim,
+    alphamean, alphavar,
+    beta_1mean, beta_1var,
+    beta_2mean, beta_2var,
+    taushape, taurate = 1/taushape,
+    startvalue
+  )
+
+  # 3) discard burn-in
+  post_b <- gibbs_chain_b[(burnin_sim+1):niter_sim, ]
+  colnames(post_b) <- c("alpha","beta1","beta2","tau")
+
+  # 4) posterior means
+  means_mat[b, ] <- colMeans(post_b)
+
+  # 5) 95% equal-tailed intervals
+  ci_lower[b, ] <- apply(post_b, 2, quantile, probs = 0.025)
+  ci_upper[b, ] <- apply(post_b, 2, quantile, probs = 0.975)
+}
+
+```
+
+Coverage of the 95% credible intervals across the 1,000 simulated datasets (share of datasets whose interval contains the true value):
+
+```{r}
+true_vals <- c(alpha = truealpha, beta1 = truebeta_1, beta2 = truebeta_2, tau = truetau)
+coverage <- sapply(colnames(means_mat), function(p) mean(ci_lower[, p] <= true_vals[p] & true_vals[p] <= ci_upper[, p]))
+round(coverage, 3)
+```
+
+Analytics of the gibbs sampler and checking that the analytic and frequentist approach agrees
+
+```{r}
+
+tau_draws <- gibbs_chain[, "tau"]    # or draws[,4]
+
+# Basic summaries
+mean_tau   <- mean(tau_draws)
+median_tau <- median(tau_draws)
+sd_tau     <- sd(tau_draws)
+mode_tau   <- function(x) {
+  # approximate mode for gamma-like sample: use density maximum
+  d <- density(x)
+  d$x[which.max(d$y)]
+}
+mode_tau_est <- mode_tau(tau_draws)
+ci_tau <- quantile(tau_draws, c(0.025, 0.975))
+
+cat("tau mean:", mean_tau, "\n")
+cat("tau median:", median_tau, "\n")
+cat("tau mode (approx):", mode_tau_est, "\n")
+cat("tau sd:", sd_tau, "\n")
+cat("95% CI:", ci_tau, "\n")
+
+# Posterior sigma (sd) summaries (often more interpretable)
+sigma_draws <- 1 / sqrt(tau_draws)
+cat("sigma mean:", mean(sigma_draws), " median:", median(sigma_draws), " sd:", sd(sigma_draws), "\n")
+
+```
+
+Plotting on a histogram:
+
+```{r}
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+png("figures/hist_gibbs_posterior_means_across_simulations.png",
+    width = 1200, height = 900, res = 150)
+par(mfrow = c(2,2), mar = c(4,4,2,1))
+
+for (p in colnames(means_mat)) {
+  vals <- means_mat[, p]
+  
+  # 95% interval of the sampling distribution of the posterior mean
+  ci <- quantile(vals, probs = c(0.025, 0.975))
+  
+  h <- hist(vals, breaks = 40, prob = TRUE,
+            main = paste("Posterior mean of", p, "over 1000 datasets"),
+            xlab = paste("Posterior mean of", p),
+            col = "lightgreen", border = "grey60")
+  
+  # density overlay
+  lines(density(vals), lwd = 2)
+  
+  # average of posterior means across simulations
+  abline(v = mean(vals), col = "black", lwd = 2)
+  
+  # true value
+  abline(v = true_vals[p], col = "red", lwd = 2)
+  
+  # 95% interval for the estimator
+  abline(v = ci, col = "blue", lwd = 2, lty = 2)
+  
+  legend("topright",
+         legend = c(
+           paste0("Avg mean = ", round(mean(vals), 3)),
+           paste0("95% interval = [", round(ci[1], 3), ", ", round(ci[2], 3), "]"),
+           paste0("True = ", round(true_vals[p], 3))
+         ),
+         col = c("black","blue","red"),
+         lwd = c(2,2,2),
+         lty = c(1,2,1),
+         bty = "n")
+}
+dev.off()
+
+
+```
+
+Traceplot of gibbs sampler
+
+```{r}
+# Post–burn-in Gibbs samples
+gibbs_post <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+colnames(gibbs_post) <- c("alpha","beta1","beta2","tau")
+
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+png("figures/Gibbs_traceplots.png",
+    width = 1200, height = 900, res = 150)
+
+par(mfrow = c(2,2), mar = c(4,4,2,1))
+
+for (p in colnames(gibbs_post)) {
+  plot(gibbs_post[, p], type = "l",
+       main = paste("Gibbs trace:", p),
+       xlab = "Iteration (post burn-in)",
+       ylab = p)
+  abline(h = true_vals[p], col = "blue", lwd = 2)
+}
+
+dev.off()
+
+
+```
+
+Auto-correlation plot of gibbs sampler chain
+
+```{r}
+# Keep only post-burn-in draws
+post <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+colnames(post) <- c("alpha","beta1","beta2","tau")
+
+# True values if needed (not used in ACF)
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+# Save figure
+png("figures/acf_plots_pretty.png", width = 1200, height = 900, res = 150)
+
+par(mfrow = c(2,2), mar = c(4.5,4.5,3.5,1))  # larger top/bottom margins for titles
+
+for (p in colnames(post)) {
+  
+  # main title + subtitle
+  acf(post[,p],
+      main = paste("ACF for", p),
+      xlab = "Lag",
+      ylab = paste("Autocorrelation of", p),
+      col  = "steelblue",
+      lwd  = 2)
+  
+}
+
+dev.off()
+
+```
+
+Running means for gibbs sampler:
+
+```{r}
+post <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+colnames(post) <- c("alpha","beta1","beta2","tau")
+
+running_mean <- function(x) cumsum(x) / seq_along(x)
+
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+png("figures/running_means_fixed.png", width = 1200, height = 900, res = 150)
+par(mfrow = c(2,2), mar = c(4.5,4.5,3.5,1))
+
+for (p in colnames(post)) {
+  rm_vals <- running_mean(post[, p])
+  
+  # include true value AND add a bit of padding
+  y_min <- min(rm_vals, true_vals[p])
+  y_max <- max(rm_vals, true_vals[p])
+  pad   <- 0.05 * (y_max - y_min + 1e-8)  # small padding
+  ylim  <- c(y_min - pad, y_max + pad)
+  
+  plot(rm_vals, type = "l", col = "darkgreen", lwd = 1.5,
+       main = paste("Running Mean (post burn-in):", p),
+       xlab = "Iteration (post burn-in)",
+       ylab = paste("Mean of", p),
+       ylim = ylim)
+  
+  abline(h = true_vals[p], col = "red", lwd = 2)
+}
+
+dev.off()
+
+
+
+```
+
+Now using the r package MCMCPack to compare with the gibbs sampler:
+
+```{r}
+#install.packages("MCMCpack")
+#install.packages("MatrixModels")
+library(MCMCpack)
+
+# Put data in a frame
+data_gibbs <- data.frame(y = y, x_1 = x_1, x_2 = x_2)
+
+# Prior for beta (alpha, beta1, beta2)
+b0 <- c(alphamean, beta_1mean, beta_2mean)
+
+# prior precision matrix for beta
+B0 <- diag(c(1/alphavar, 1/beta_1var, 1/beta_2var))
+
+
+c0 <- 2 * taushape
+d0 <- 2 * 1/taushape #taurate
+
+
+niter = 50000
+burnin = 10000
+mcmc_iters <- niter - burnin
+
+  
+t_package <- system.time({fit_mcmcpack <- MCMCregress(
+  y ~ x_1 + x_2,
+  data   = data_gibbs,
+  burnin = burnin,
+  mcmc   = mcmc_iters,
+  b0     = b0,
+  B0     = B0,
+  c0     = c0,
+  d0     = d0
+)})
+
+summary(fit_mcmcpack)
+
+
+```
+
+Comparing
+
+```{r}
+
+#install.packages("rmarkdown") 
+library(rmarkdown)
+colnames(gibbs_chain) <- c("alpha","beta1","beta2","tau")
+post_gibbs <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+
+
+post_mcmc <- as.matrix(fit_mcmcpack)
+colnames(post_mcmc)
+
+
+tau_mcmc <- 1 / post_mcmc[,"sigma2"]
+
+
+post_mcmc_aligned <- cbind(
+  alpha = post_mcmc[,"(Intercept)"],
+  beta1 = post_mcmc[,"x_1"],
+  beta2 = post_mcmc[,"x_2"],
+  tau   = tau_mcmc
+)
+
+
+means_gibbs <- colMeans(post_gibbs)
+means_mcmc  <- colMeans(post_mcmc_aligned)
+
+comparison_means <- cbind(
+  My_Gibbs = round(means_gibbs, 4),
+  MCMCpack    = round(means_mcmc, 4),
+  True        = c(truealpha, truebeta_1, truebeta_2, truetau)
+)
+comparison_means
+
+summ_fun <- function(m) {
+  rbind(
+    mean  = apply(m, 2, mean),
+    sd    = apply(m, 2, sd),
+    q025  = apply(m, 2, quantile, 0.025),
+    q975  = apply(m, 2, quantile, 0.975)
+  )
+}
+
+summ_gibbs <- round(summ_fun(post_gibbs), 4)
+summ_mcmc  <- round(summ_fun(post_mcmc_aligned), 4)
+
+
+cat("\nPosterior Summary Table — My Gibbs Sampler\n")
+print(summ_gibbs)
+kable(summ_gibbs, format = "latex", booktabs = TRUE,
+      caption = "Posterior Summary: My Gibbs Sampler")
+
+cat("\nPosterior Summary Table — MCMCpack\n")
+print(summ_mcmc)
+kable(summ_mcmc, format = "latex", booktabs = TRUE,
+      caption = "Posterior Summary: Package Gibbs Sampler")
+
+cat("\nComparison of Posterior Means:\n")
+print(comparison_means)
+kable(comparison_means, format = "latex", booktabs = TRUE,
+      caption = "Comparison of Parameter means between MCMC package and my code")
+
+
+
+```
+
+Overlay posterior distributions
+
+```{r}
+png("figures/Overlay_comparison_gibbs.png",
+    width = 1200, height = 900, res = 150)
+
+# beta1: my Gibbs vs MCMCpack
+gibbs_beta1 <- post_gibbs[,"beta1"]
+pack_beta1  <- post_mcmc_aligned[,"beta1"]
+
+hist(gibbs_beta1, breaks = 40, prob = TRUE,
+     main = "Posterior of beta1: My Gibbs vs MCMCpack",
+     xlab = "beta1", col = "lightblue", border = "grey60")
+
+lines(density(gibbs_beta1), lwd = 2)              # your Gibbs
+lines(density(pack_beta1),  col = "red", lwd = 2) # MCMCpack
+abline(v = truebeta_1, col = "black", lwd = 2)    # true value
+
+legend("topright",
+       legend = c("My Gibbs", "MCMCpack", "True value"),
+       col    = c("black","red","black"),
+       lwd    = c(2,2,2),
+       bty    = "n")
+
+
+```
+
+
+
+
+```{r}
+
+# Post-burn-in Gibbs samples
+post_gibbs <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+colnames(post_gibbs) <- c("alpha","beta1","beta2","tau")
+
+# IS samples (resampled)
+post_IS <- cbind(
+  alpha = alpha_list,
+  beta1 = beta1_list,
+  beta2 = beta2_list,
+  tau   = tau_list
+)
+
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+png("figures/IS_vs_Gibbs_densities.png",
+    width = 1200, height = 900, res = 150)
+
+## Layout: 4 plots + 1 legend row at the bottom
+layout(matrix(c(1,2,
+                3,4,
+                5,5), nrow = 3, byrow = TRUE),
+       heights = c(1,1,0.25))
+
+par(mar = c(4,4,2.5,1))  # margins for the 4 main panels
+
+for (p in colnames(post_IS)) {
+  
+  x_IS    <- post_IS[, p]
+  x_gibbs <- post_gibbs[, p]
+  
+  dens_IS    <- density(x_IS,    adjust = 1.2)
+  dens_gibbs <- density(x_gibbs, adjust = 1.2)
+  
+  x_min <- min(dens_IS$x, dens_gibbs$x, true_vals[p])
+  x_max <- max(dens_IS$x, dens_gibbs$x, true_vals[p])
+  y_max <- 1.1 * max(dens_IS$y, dens_gibbs$y)
+  
+  hist(x_gibbs,
+       breaks = 40,
+       freq   = FALSE,
+       xlim   = c(x_min, x_max),
+       ylim   = c(0, y_max),
+       main   = paste("Posterior of", p, ": Gibbs vs IS"),
+       xlab   = p,
+       ylab   = "Density",
+       col    = "lightgreen",
+       border = "grey60")
+  
+  # filled IS density
+  polygon(dens_IS$x, dens_IS$y,
+          col    = rgb(1, 0, 0, 0.25),
+          border = "red3", lwd = 2)
+  
+  # Gibbs density
+  lines(dens_gibbs, col = "black", lwd = 2)
+  
+  # true value
+  abline(v = true_vals[p], col = "blue", lwd = 2)
+  
+  # ONLY for tau: add means
+  if (p == "tau") {
+    mean_gibbs <- mean(x_gibbs)
+    mean_IS    <- mean(x_IS)
+    abline(v = mean_gibbs, col = "black", lwd = 2, lty = 2)
+    abline(v = mean_IS,    col = "red3",  lwd = 2, lty = 2)
+  }
+}
+
+## Universal legend panel
+par(mar = c(0,0,0,0))
+plot.new()
+legend("center",
+       legend = c("Gibbs density", "IS density", "True value",
+                  "Gibbs mean (tau)", "IS mean (tau)"),
+       col    = c("black", "red3", "blue", "black", "red3"),
+       lwd    = c(2,2,2,2,2),
+       lty    = c(1,1,1,2,2),
+       bty    = "n",
+       fill   = c(NA, rgb(1,0,0,0.25), NA, NA, NA))
+
+dev.off()
+
+
+
+
+
+
+```
+Final comparison table !
+
+```{r}
+library(knitr)
+
+## True values ----------------------------------------------------
+true_vals <- c(alpha = truealpha,
+               beta1 = truebeta_1,
+               beta2 = truebeta_2,
+               tau   = truetau)
+
+## Posterior / point estimates ------------------------------------
+
+
+post_gibbs <- gibbs_chain[(burnin+1):nrow(gibbs_chain), ]
+colnames(post_gibbs) <- c("alpha","beta1","beta2","tau")
+gibbs_means <- colMeans(post_gibbs)
+
+# 2) Importance sampling 
+post_IS <- cbind(
+  alpha = alpha_list,
+  beta1 = beta1_list,
+  beta2 = beta2_list,
+  tau   = tau_list
+)
+is_means <- colMeans(post_IS)
+
+# 3) Package Gibbs (MCMCpack)
+mcmc_means <- colMeans(post_mcmc_aligned)
+
+# 4) Metropolis–Hastings (MH)
+post_mh <- chain[(burnin+1):nrow(chain), ]
+colnames(post_mh) <- c("alpha","beta1","beta2","tau")
+mh_means <- colMeans(post_mh)
+
+# 5) Maximum likelihood
+# ml_results: named vector c(alpha, beta1, beta2, tau)
+
+## Runtimes 
+
+time_gibbs   <- as.numeric(t_gibbs["elapsed"])      # your Gibbs
+time_package <- as.numeric(t_package["elapsed"])    # MCMCpack
+time_IS      <- as.numeric(t_is["elapsed"])         # importance sampling
+time_ml      <- as.numeric(t_ml["elapsed"])         # maximum likelihood
+time_mh      <- as.numeric(t_metrop["elapsed"])     # Metropolis–Hastings
+
+
+
+summary_table <- rbind(
+  "True values"          = c(true_vals,      Time_sec = NA),
+  "Maximum likelihood"   = c(ml_results,     Time_sec = time_ml),
+  "Gibbs (mine)"         = c(gibbs_means,    Time_sec = time_gibbs),
+  "Gibbs (MCMCpack)"     = c(mcmc_means,     Time_sec = time_package),
+  "Metropolis–Hastings"  = c(mh_means,       Time_sec = time_mh),
+  "Importance sampling"  = c(is_means,       Time_sec = time_IS)
+)
+
+## Add RMSE column ------------------------------------------------
+
+# take only the estimate rows (exclude "True values")
+method_rows <- setdiff(rownames(summary_table), "True values")
+
+# estimates for alpha,beta1,beta2,tau
+estimates <- summary_table[method_rows, 1:4]
+
+# compute RMSE for each method
+rmse <- sqrt(rowMeans((sweep(estimates, 2, true_vals, FUN = "-"))^2))
+
+# add RMSE column; NA for the "True values" row
+summary_table <- cbind(summary_table,
+                       RMSE = c(NA, rmse[rownames(summary_table)[-1]]))
+
+summary_table <- round(summary_table, 4)
+
+
+kable(summary_table,
+      caption = "True parameter values, point/posterior estimates, runtimes (seconds), and overall RMSE for each method.",
+      digits = 4,
+      format = "latex",
+      booktabs = TRUE)
+
+
+
+```
+
+Effective sample size (post burn-in) for Gibbs vs Metropolis-Hastings, and per second of run time:
+
+```{r}
+post_gibbs_ess <- gibbs_chain[(burnin+1):nrow(gibbs_chain), c("alpha","beta1","beta2","tau")]
+post_mh_ess    <- chain[(burnin+1):nrow(chain), c("alpha","beta1","beta2","tau")]
+ess_table <- rbind(
+  Gibbs = effectiveSize(as.mcmc(post_gibbs_ess)),
+  MH    = effectiveSize(as.mcmc(post_mh_ess))
+)
+round(ess_table, 0)
+round(ess_table / c(as.numeric(t_gibbs["elapsed"]), as.numeric(t_metrop["elapsed"])), 1)  # ESS per second
+```
